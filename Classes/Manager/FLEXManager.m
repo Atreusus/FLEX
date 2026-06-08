@@ -161,3 +161,22 @@
 }
 
 @end
+
+// ========== TrollFools 注入入口 ==========
+__attribute__((constructor(101)))
+static void flex_trollfools_entry(void) {
+    NSLog(@"[FLEX Inject] Constructor called, scheduling explorer launch...");
+    
+    // 延迟 2 秒等待宿主 App UI 就绪
+    // 如果目标 App 启动较慢，可改为 3~5 秒
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), 
+                   dispatch_get_main_queue(), ^{
+        NSLog(@"[FLEX Inject] Showing FLEX explorer...");
+        @try {
+            [[FLEXManager sharedManager] showExplorer];
+            NSLog(@"[FLEX Inject] FLEX explorer shown successfully.");
+        } @catch (NSException *e) {
+            NSLog(@"[FLEX Inject] Failed to show FLEX: %@", e);
+        }
+    });
+}
