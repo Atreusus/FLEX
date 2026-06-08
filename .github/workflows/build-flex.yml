@@ -1,7 +1,7 @@
 name: Build FLEX Dylib for TrollFools
 
 on:
-  workflow_dispatch: # 允许手动点击触发
+  workflow_dispatch:
   push:
     branches: [ main, master ]
 
@@ -17,9 +17,13 @@ jobs:
       - name: Select Xcode Version
         run: sudo xcode-select -s /Applications/Xcode_15.4.app
 
-      - name: Build FLEX as Dynamic Library
+      - name: Install ldid-procursus
         run: |
-          # 强制将构建产物改为动态库，并禁用签名（TrollFools 会重签）
+          brew install ldid-procursus
+          echo "✅ ldid-procursus installed: $(ldid --version 2>&1 || true)"
+
+      - name: Build Optimized FLEX Dylib
+        run: |
           xcodebuild -project FLEX.xcodeproj \
             -scheme FLEX \
             -configuration Release \
@@ -31,25 +35,50 @@ jobs:
             MACH_O_TYPE=mh_dylib \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             SKIP_INSTALL=NO \
+            GCC_GENERATE_DEBUGGING_SYMBOLS=NO \
+            STRIP_INSTALLED_PRODUCT=YES \
+            STRIP_STYLE=all \
             -derivedDataPath ./build \
             clean build
 
-      - name: Extract and Package Dylib
+      - name: Extract, Sign and Package Dylib
         run: |
           mkdir -p output
-          # FLEX 构建为 dylib 后，二进制文件通常与 target 同名
-          DYLIB_PATH=$(find ./build -type f -name "FLEX" ! -name "*.dSYM" ! -path "*/FLEX.framework/*" | head -n 1)
+          
+          # 查找编译出的纯 arm64 dylib 二进制（排除 dSYM 和 framework 目录）
+          DYLIB_PATH=$(find ./build -type f -name "FLEX" ! -name "*.dSYM" ! -path "*/FLEX.framework/*" ! -path "*/usr/lib/*" | head -n 1)
           
           if [ -z "$DYLIB_PATH" ]; then
             echo "❌ Error: Could not find standalone FLEX dylib binary."
-            echo "Listing all files in build directory for debugging:"
-            find ./build -type f | grep -i flex
+            echo "📂 Listing all files in build directory for debugging:"
+            find ./build -type f | grep -i flex || true
             exit 1
           fi
           
-          echo "✅ Found dylib at: $DYLIB_PATH"
+          echo "✅ Found raw binary at: $DYLIB_PATH"
+          RAW_SIZE=$(stat -f%z "$DYLIB_PATH")
+          echo "📏 Raw size: $((RAW_SIZE / 1024)) KB"
+          
+          # 复制到输出目录并重命名
           cp "$DYLIB_PATH" output/FLEX.dylib
-          ls -lh output/
+          
+          # 使用新版 ldid-procursus 进行 ad-hoc 预签名
+          echo "🔏 Signing with ldid-procursus..."
+          ldid -S output/FLEX.dylib
+          
+          # 验证签名
+          ldid -e output/FLEX.dylib > /dev/null 2>&1 && echo "✅ Signature verified" || echo "⚠️ Signature verification failed"
+          
+          # 输出最终文件大小
+          FINAL_SIZE=$(stat -f%z output/FLEX.dylib)
+          echo "📦 Final signed dylib size: $((FINAL_SIZE / 1024)) KB ($((FINAL_SIZE / 1024 / 1024)).$((FINAL_SIZE * 100 / 1024 / 1024 % 100)) MB)"
+          
+          # 如果仍然超过 3MB 发出警告
+          if [ "$FINAL_SIZE" -gt 3145728 ]; then
+            echo "⚠️ WARNING: Dylib is still larger than 3MB! TrollFools may still fail."
+          else
+            echo "✅ Size is under 3MB threshold. Safe for TrollFools injection."
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
