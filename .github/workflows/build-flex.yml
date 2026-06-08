@@ -20,10 +20,11 @@ jobs:
       - name: Install ldid-procursus
         run: |
           brew install ldid-procursus
-          echo "✅ ldid-procursus installed: $(ldid --version 2>&1 || true)"
+          echo "✅ ldid-procursus installed"
 
-      - name: Build Optimized FLEX Dylib
+      - name: Build FLEX Framework
         run: |
+          # 既然无法强制转为纯 dylib，就直接编译标准的 Framework
           xcodebuild -project FLEX.xcodeproj \
             -scheme FLEX \
             -configuration Release \
@@ -32,7 +33,6 @@ jobs:
             ONLY_ACTIVE_ARCH=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            MACH_O_TYPE=mh_dylib \
             BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
             SKIP_INSTALL=NO \
             GCC_GENERATE_DEBUGGING_SYMBOLS=NO \
@@ -41,26 +41,23 @@ jobs:
             -derivedDataPath ./build \
             clean build
 
-      - name: Extract, Sign and Package Dylib
+      - name: Extract, Convert and Sign Dylib
         run: |
           mkdir -p output
           
-          # 查找编译出的纯 arm64 dylib 二进制（排除 dSYM 和 framework 目录）
-          DYLIB_PATH=$(find ./build -type f -name "FLEX" ! -name "*.dSYM" ! -path "*/FLEX.framework/*" ! -path "*/usr/lib/*" | head -n 1)
+          # 直接从 .framework 中提取 Mach-O 二进制
+          FRAMEWORK_BINARY="./build/Build/Products/Release-iphoneos/FLEX.framework/FLEX"
           
-          if [ -z "$DYLIB_PATH" ]; then
-            echo "❌ Error: Could not find standalone FLEX dylib binary."
-            echo "📂 Listing all files in build directory for debugging:"
-            find ./build -type f | grep -i flex || true
+          if [ ! -f "$FRAMEWORK_BINARY" ]; then
+            echo "❌ Error: Framework binary not found at $FRAMEWORK_BINARY"
             exit 1
           fi
           
-          echo "✅ Found raw binary at: $DYLIB_PATH"
-          RAW_SIZE=$(stat -f%z "$DYLIB_PATH")
-          echo "📏 Raw size: $((RAW_SIZE / 1024)) KB"
+          echo "✅ Found framework binary"
+          cp "$FRAMEWORK_BINARY" output/FLEX.dylib
           
-          # 复制到输出目录并重命名
-          cp "$DYLIB_PATH" output/FLEX.dylib
+          # 验证是否为有效的 Mach-O 文件
+          file output/FLEX.dylib
           
           # 使用新版 ldid-procursus 进行 ad-hoc 预签名
           echo "🔏 Signing with ldid-procursus..."
@@ -71,9 +68,8 @@ jobs:
           
           # 输出最终文件大小
           FINAL_SIZE=$(stat -f%z output/FLEX.dylib)
-          echo "📦 Final signed dylib size: $((FINAL_SIZE / 1024)) KB ($((FINAL_SIZE / 1024 / 1024)).$((FINAL_SIZE * 100 / 1024 / 1024 % 100)) MB)"
+          echo "📦 Final signed dylib size: $((FINAL_SIZE / 1024)) KB"
           
-          # 如果仍然超过 3MB 发出警告
           if [ "$FINAL_SIZE" -gt 3145728 ]; then
             echo "⚠️ WARNING: Dylib is still larger than 3MB! TrollFools may still fail."
           else
