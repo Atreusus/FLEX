@@ -1,0 +1,59 @@
+name: Build FLEX Dylib for TrollFools
+
+on:
+  workflow_dispatch: # 允许手动点击触发
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Select Xcode Version
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+
+      - name: Build FLEX as Dynamic Library
+        run: |
+          # 强制将构建产物改为动态库，并禁用签名（TrollFools 会重签）
+          xcodebuild -project FLEX.xcodeproj \
+            -scheme FLEX \
+            -configuration Release \
+            -sdk iphoneos \
+            -arch arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            MACH_O_TYPE=mh_dylib \
+            BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
+            SKIP_INSTALL=NO \
+            -derivedDataPath ./build \
+            clean build
+
+      - name: Extract and Package Dylib
+        run: |
+          mkdir -p output
+          # FLEX 构建为 dylib 后，二进制文件通常与 target 同名
+          DYLIB_PATH=$(find ./build -type f -name "FLEX" ! -name "*.dSYM" ! -path "*/FLEX.framework/*" | head -n 1)
+          
+          if [ -z "$DYLIB_PATH" ]; then
+            echo "❌ Error: Could not find standalone FLEX dylib binary."
+            echo "Listing all files in build directory for debugging:"
+            find ./build -type f | grep -i flex
+            exit 1
+          fi
+          
+          echo "✅ Found dylib at: $DYLIB_PATH"
+          cp "$DYLIB_PATH" output/FLEX.dylib
+          ls -lh output/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FLEX-TrollFools-arm64
+          path: output/FLEX.dylib
+          retention-days: 30
